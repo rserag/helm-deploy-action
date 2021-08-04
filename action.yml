@@ -23,7 +23,7 @@ inputs:
     required: false
     default: ''
   CHART_REPO_SSH_KEY:
-    description: 'SSH key to clone Helm Chart git repo'
+    description: 'SSH key to clone Helm Chart git repository'
     required: false
     default: ''
   USE_DEFAULT_VALUE_GENERATOR:
@@ -41,8 +41,8 @@ inputs:
 
   HELM_RELEASE_NAME:
     description: 'Name of the Helm release'
-    required: false
-    default: 'default'
+    required: true
+    default: ''
   HELM_RELEASE_NAMESPACE:
     description: 'Namespace in which you want to deploy application'
     required: false
