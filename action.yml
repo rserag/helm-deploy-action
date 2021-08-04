@@ -1,0 +1,163 @@
+name: 'Helm Chart Deployment'
+description: 'This actions deploys you Helm Chart to K8s cluster'
+inputs:
+  IMAGE_TAG:
+    description: 'Tag of the docker image'
+    required: true
+    default: ''
+  IMAGE:
+    description: 'Docker image (without tag)'
+    required: true
+    default: ''
+  HELM_CHART_PATH:
+    description: 'Path to Helm Chart'
+    required: false
+    default: 'chart/'
+
+  DIFFERENT_REPO_CHART:
+    description: 'If Helm Chart is in different repository and needs to be cloned'
+    required: false
+    default: false
+  CHART_REPO:
+    description: 'Helm Chart git repo'
+    required: false
+    default: ''
+  CHART_REPO_SSH_KEY:
+    description: 'SSH key to clone Helm Chart git repo'
+    required: false
+    default: ''
+  USE_DEFAULT_VALUE_GENERATOR:
+    description: 'Generates values.yaml based on IMAGE and IMAGE_TAG'
+    required: false
+    default: true
+  CHART_VALUES_PATH:
+    description: 'Values file path for Helm Chart'
+    required: false
+    default: 'values-default.yaml'
+  UPDATE_CHART_FILE:
+    description: 'Updates chart.yaml file with new version'
+    required: false
+    default: false
+
+  HELM_RELEASE_NAME:
+    description: 'Name of the Helm release'
+    required: false
+    default: 'default'
+  HELM_RELEASE_NAMESPACE:
+    description: 'Namespace in which you want to deploy application'
+    required: false
+    default: 'default'
+  HELM_DEPLOY_WAIT_TIMEOUT:
+    description: 'Timeout for waiting deploying to become ready'
+    required: false
+    default: '180'
+  PRINT_LOGS_AND_DESCRIPTION:
+    description: 'Print logs and description if deployment has been failed'
+    required: false
+    default: true
+
+  USING_GKE_CLUSTER:
+    description: 'Set true if you're deploying to GKE'
+    required: false
+    default: false
+  GKE_CLUSTER_NAME:
+    description: 'GKE cluster name'
+    required: false
+    default: ''
+  GKE_LOCATION:
+    description: 'GKE cluster location'
+    required: false
+    default: ''
+  GKE_CREDENTIALS:
+    description: 'GKE cluster SA key'
+    required: false
+    default: ''
+
+  USING_EKS_CLUSTER:
+    description: 'Set true if you're deploying to EKS'
+    required: false
+    default: false
+  EKS_CLUSTER_NAME:
+    description: 'EKS cluster name'
+    required: false
+    default: ''
+  EKS_LOCATION:
+    description: 'EKS cluster location'
+    required: false
+    default: ''
+  AWS_ACCESS_KEY_ID:
+    description: 'AWS access key id'
+    required: false
+    default: ''
+  AWS_SECRET_ACCESS_KEY:
+    description: 'AWS access key'
+    required: false
+    default: ''
+outputs:
+  random-number:
+    description: "Random number"
+    value: 1
+runs:
+  using: "composite"
+  steps:
+    - name: Configure GKE credentials
+      uses: google-github-actions/get-gke-credentials@fb08709ba27618c31c09e014e1d8364b02e5042e
+      with:
+        cluster_name: ${{ input.GKE_CLUSTER_NAME }}
+        location: ${{ input.GKE_LOCATION }}
+        credentials: ${{ input.GKE_CREDENTIALS }}
+      if: ${{ input.USING_GKE_CLUSTER == true }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ input.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ input.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ input.EKS_LOCATION }}
+      if: ${{ input.USING_EKS_CLUSTER == true }}
+
+    - name: Configure GKE credentials
+      run:  |-
+        aws eks --region ${{ input.EKS_LOCATION }} update-kubeconfig --name ${{ input.EKS_CLUSTER_NAME }}
+      shell: bash
+      if: ${{ input.USING_EKS_CLUSTER == true }}
+
+    - name: Clone Helm Chart git repository
+      run:  |-
+        mkdir ~/.ssh
+        echo "${{ input.CHART_REPO_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        git clone ${{ input.CHART_REPO }} cloned-config-repo
+      shell: bash
+      if: ${{ input.DIFFERENT_REPO_CHART == true }}
+
+    - name: Set Helm Chart path/name
+      id: chart-name
+      run: echo "::set-output name=chart::$(echo cloned-config-repo/${{ input.HELM_CHART_PATH }})"
+
+    - name: Generate values for Helm Chart
+      run:  |-
+        echo "commitHash: \"${{ input.IMAGE_TAG }}\"" $'\n'$'image:\n' "  repository: ${{ input.IMAGE }}"  > values-default.yaml
+      shell: bash
+      if: ${{ input.USE_DEFAULT_VALUE_GENERATOR == true }}
+
+    - name: Deploy Helm Chart
+      run:  |-
+        if ! helm upgrade --namespace ${{ input.HELM_RELEASE_NAMESPACE }} --create-namespace -f ${{ input.CHART_VALUES_PATH }} -f values-default.yaml --install --wait --atomic '--timeout=${{ input.HELM_DEPLOY_WAIT_TIMEOUT }}s' ${{ input.HELM_RELEASE_NAME }} ${{ steps.chart-name.outputs.chart }}; then
+        kubectl describe po -l version=${{ input.IMAGE_TAG }}
+        kubectl logs --tail=2000 -l version=${{ input.IMAGE_TAG }}
+        exit 1
+        fi
+      shell: bash
+
+    - name: Update Charts
+      run:  |-
+        sed -i 's/appVersion.*/appVersion: "'"${{ input.IMAGE_TAG }}"'"/' cloned-config-repo/${{ input.HELM_CHART_PATH }}Chart.yaml
+        cd cloned-config-repo
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "github-actions@default.com"
+        git add .
+        git commit -m "skip ci ${{ input.IMAGE_TAG }}"
+        git pull && git push
+      shell: bash
+      if: ${{ input.UPDATE_CHART_FILE == true && input.DIFFERENT_REPO_CHART }}
